@@ -8,18 +8,21 @@ import requests
 import json
 
 
-# Lark 配置(从 .env 读)
+# Lark 配置(从 .env 读；.env 不存在时回退到系统环境变量，不崩溃)
 def load_env():
     env_path = os.path.join(os.path.dirname(__file__), ".env")
     env = {}
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip()
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    for k, v in os.environ.items():
+        env.setdefault(k, v)
     return env
 
 ENV = load_env()
@@ -144,7 +147,7 @@ def minimax_video(video_path: str, prompt: str = "描述这个视频的内容", 
 
         # 抽帧时间点
         times = [duration * (i + 0.5) / frames for i in range(frames)]
-        frame_paths = []
+        frames_with_time = []  # (时间点秒, 帧路径)
         for i, t in enumerate(times):
             frame_path = f"/tmp/frame_{i}.jpg"
             subprocess.run(
@@ -152,14 +155,14 @@ def minimax_video(video_path: str, prompt: str = "描述这个视频的内容", 
                 capture_output=True, timeout=5
             )
             if os.path.exists(frame_path) and os.path.getsize(frame_path) > 0:
-                frame_paths.append(frame_path)
+                frames_with_time.append((t, frame_path))
 
-        if not frame_paths:
+        if not frames_with_time:
             return "❌ 视频抽帧失败"
 
-        # 用 VLM 看每帧
+        # 用 VLM 看每帧（注意：时间戳必须用当前帧自己的 t，不能复用循环外变量）
         frame_descriptions = []
-        for fp in frame_paths:
+        for t, fp in frames_with_time:
             desc = minimax_vlm(fp, f"这是视频第 {t:.1f} 秒的画面,描述内容。")
             if desc:
                 frame_descriptions.append(desc)
