@@ -28,19 +28,28 @@ from langgraph.checkpoint.sqlite import SqliteSaver
 def load_env():
     env_path = os.path.join(os.path.dirname(__file__), ".env")
     env = {}
-    with open(env_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#"):
-                continue
-            if "=" in line:
-                k, v = line.split("=", 1)
-                env[k.strip()] = v.strip()
+    # .env 不存在时不崩溃，回退到系统环境变量（生产环境推荐用环境变量注入）
+    if os.path.exists(env_path):
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    # 系统环境变量优先级更高
+    for k in list(env.keys()) + ["LARK_APP_ID", "LARK_APP_SECRET", "PORT",
+                                 "LARK_VERIFICATION_TOKEN", "ENCRYPT_KEY"]:
+        if k in os.environ:
+            env[k] = os.environ[k]
     return env
 
 ENV = load_env()
 LARK_APP_ID = ENV.get("LARK_APP_ID")
 LARK_APP_SECRET = ENV.get("LARK_APP_SECRET")
+LARK_VERIFICATION_TOKEN = ENV.get("LARK_VERIFICATION_TOKEN", "")
+LARK_ENCRYPT_KEY = ENV.get("ENCRYPT_KEY", "")
 PORT = int(ENV.get("PORT", "8766"))
 
 
@@ -276,7 +285,30 @@ def health():
 
 @app.route("/lark/webhook/biseo/", methods=["POST"])
 def webhook():
-    data = request.json
+    # 0. 请求体健壮性：非 JSON / 空 body 时直接拒绝，避免 None 崩溃
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"code": 1, "msg": "invalid json body"}), 400
+
+    # 0.5 安全校验：验证请求确实来自 Lark
+    #     - 若配置了 Verification Token，校验 header X-Lark-Signature 之外的 token
+    #       (url_verification 事件里 token 在 body，普通事件里 token 在 header 旧版才有；
+    #        新版 v2 事件 token 在 body.header 不含 token —— 因此同时兼容两种位置)
+    #     - 未配置 token 时记录警告（开发模式放行），生产必须配置
+    if LARK_VERIFICATION_TOKEN:
+        token_in_body = data.get("token", "") or ""
+        # 新版 v2 事件 schema：url_verification 的 token 在 body 顶层；
+        # 普通事件不携带 token，因此仅在 body 有 token 字段时校验，
+        # 若请求头带 X-Lark-Request-Token（旧版）也一并兼容。
+        token_in_header = request.headers.get("X-Lark-Request-Token", "") or ""
+        has_token_field = ("token" in data) or bool(token_in_header)
+        if has_token_field and token_in_body != LARK_VERIFICATION_TOKEN \
+                and token_in_header != LARK_VERIFICATION_TOKEN:
+            print(f"⚠️ 拒绝非法请求: token 不匹配 (remote={request.remote_addr})")
+            return jsonify({"code": 1, "msg": "invalid token"}), 401
+    else:
+        print("⚠️ [SECURITY] LARK_VERIFICATION_TOKEN 未配置，webhook 处于无鉴权状态！")
+
     print(f"\n📨 收到 webhook: {json.dumps(data)[:300]}")
 
     # 1. URL 验证
@@ -388,13 +420,21 @@ def webhook():
         "tool_error": "",
         "tool_attempts": 0,
         "verified": False,
+        "needs_history": False,
         "final_answer": "",
         "history": []
     }
     start = time.time()
-    with SqliteSaver.from_conn_string("production_checkpoints.db") as memory:
-        graph_app = workflow.compile(checkpointer=memory)
-        result = graph_app.invoke(state, config=config)
+    try:
+        with SqliteSaver.from_conn_string("production_checkpoints.db") as memory:
+            graph_app = workflow.compile(checkpointer=memory)
+            result = graph_app.invoke(state, config=config)
+    except Exception as e:
+        # Agent 内部任何异常（LLM key 缺失/网络超时等）都不应让 webhook 返回 500，
+        # 否则 Lark 会不断重试并产生错误日志风暴；给用户一条兜底回复即可。
+        print(f"❌ LangGraph 执行失败: {e}")
+        send_lark_message(chat_id, f"⚠️ 我现在处理这条消息时出错了({type(e).__name__})，请稍后重试或联系管理员。", message_id=message_id)
+        return jsonify({"code": 0, "msg": "agent error, fallback sent"})
     elapsed = time.time() - start
     print(f"⏱️  LangGraph 耗时: {elapsed:.1f}s")
     print(f"📊 节点:thinking → choose_tool → {'execute_tool → verify → ' if result.get('chosen_tool') else ''}respond")

@@ -39,6 +39,7 @@ class AgentState(TypedDict):
     tool_error: str         # 工具错误
     tool_attempts: int      # 尝试次数
     verified: bool          # 验证通过
+    needs_history: bool     # 🆕 thinking_node 判断是否需要拉取群历史
     final_answer: str       # 最终回复
     history: list           # 对话历史
 
@@ -47,15 +48,23 @@ class AgentState(TypedDict):
 # 2. LLM 调用(用 Hermes 自己的 MiniMax M3 key)
 # ============================================================
 def call_llm(prompt: str, system_prompt: str = "") -> str:
-    """调 MiniMax M3(从 ~/.hermes/.env 读)"""
-    hermes_env = os.path.expanduser("~/.hermes/.env")
-    hermes_config = os.path.expanduser("~/.hermes/config.yaml")
-    api_key = None
-    with open(hermes_env) as f:
-        for line in f:
-            if line.startswith("MINIMAX_API_KEY="):
-                api_key = line.split("=", 1)[1].strip()
+    """调 MiniMax M3（API key 读取顺序：环境变量 MINIMAX_API_KEY → 项目 .env → ~/.hermes/.env）"""
+    api_key = os.environ.get("MINIMAX_API_KEY")
+    if not api_key:
+        for env_file in (os.path.join(os.path.dirname(__file__), ".env"),
+                         os.path.expanduser("~/.hermes/.env")):
+            if os.path.exists(env_file):
+                with open(env_file) as f:
+                    for line in f:
+                        if line.startswith("MINIMAX_API_KEY="):
+                            api_key = line.split("=", 1)[1].strip()
+                            break
+            if api_key:
                 break
+    if not api_key:
+        raise RuntimeError("未找到 MINIMAX_API_KEY（请设置环境变量或写入项目 .env，参考 .env.example）")
+
+    hermes_config = os.path.expanduser("~/.hermes/config.yaml")
 
     # LLM 用 anthropic 端点
     llm_base_url = "https://api.minimax.io/anthropic"
