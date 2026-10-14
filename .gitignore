@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+.venv/
+*.egg-info/
+
+# 凭证(关键!绝不进 git)
+.env
+.env.local
+*.bak
+*.bak.*
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3
+dedup.db
+production_checkpoints.db
+
+# 测试文件
+test_real.py
+test_replay.py
+/tmp/bot_*.mp3
+/tmp/bot_*.ogg
+/tmp/test.ogg
+
+# 日志
+*.log
+/tmp/*.log
+/tmp/cf-*.log
+
+# macOS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 临时文件
+/tmp/video_frames/
+/tmp/bot_reply.mp3
+/tmp/bot_tts_reply.mp3
