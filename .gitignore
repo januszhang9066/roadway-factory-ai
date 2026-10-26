@@ -21,6 +21,11 @@ env/
 *.sqlite3
 dedup.db
 production_checkpoints.db
+demo_checkpoints.db
+# SQLite WAL/SHM 临时文件
+*.db-shm
+*.db-wal
+*.db-journal
 
 # 测试文件
 test_real.py
